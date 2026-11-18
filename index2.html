@@ -1,0 +1,1136 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>AR beam</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Google Fonts: Noto Sans JP & Orbitron -->
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700;900&family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
+  <!-- Three.js (3D空間レンダリング用) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js" crossorigin="anonymous"></script>
+  <!-- MediaPipe Hands -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js" crossorigin="anonymous"></script>
+
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100dvh;
+      font-family: 'Noto Sans JP', sans-serif;
+      background-color: #03060d;
+      color: #ffffff;
+      overflow: hidden;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: manipulation;
+    }
+    .font-tech {
+      font-family: 'Orbitron', sans-serif;
+    }
+    /* スマホのノッチ・セーフエリア対応 */
+    .safe-top {
+      padding-top: max(0.75rem, env(safe-area-inset-top));
+    }
+    .safe-bottom {
+      padding-bottom: max(1rem, env(safe-area-inset-bottom));
+    }
+    /* カメラ映像（全画面カバー表示） */
+    #webcam {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      z-index: 1;
+    }
+    .mirrored-video {
+      transform: scaleX(-1);
+    }
+    /* 3D空間オーバーレイCanvas */
+    #three-canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 2;
+      pointer-events: none;
+    }
+    /* 画面振動アニメーション */
+    @keyframes screen-shake {
+      0% { transform: translate(0px, 0px) rotate(0deg); }
+      20% { transform: translate(-3px, 2px) rotate(-0.3deg); }
+      40% { transform: translate(3px, -2px) rotate(0.3deg); }
+      60% { transform: translate(-2px, -2px) rotate(-0.2deg); }
+      80% { transform: translate(2px, 2px) rotate(0.2deg); }
+      100% { transform: translate(0px, 0px) rotate(0deg); }
+    }
+    .shaking {
+      animation: screen-shake 0.11s infinite;
+    }
+    /* グラスモーフィズムUI */
+    .glass-panel {
+      background: rgba(8, 13, 26, 0.68);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+    }
+  </style>
+</head>
+<body class="relative overflow-hidden">
+
+  <!-- メインコンテナ（振動エフェクト対象） -->
+  <div id="stage-container" class="relative w-full h-full bg-black overflow-hidden">
+    <!-- カメラ映像ソース（iOS Safari / Android Chrome完全対応属性） -->
+    <video id="webcam" class="mirrored-video" playsinline webkit-playsinline autoplay muted></video>
+    
+    <!-- Three.js 3D描画用Canvas -->
+    <canvas id="three-canvas"></canvas>
+
+    <!-- 画面フラッシュ用オーバーレイ -->
+    <div id="flash-overlay" class="pointer-events-none fixed inset-0 bg-white opacity-0 transition-opacity duration-150 z-10"></div>
+  </div>
+
+  <!-- 上部ステータスバー（セーフエリア対応） -->
+  <header class="fixed top-0 left-0 right-0 z-20 px-3 sm:px-5 safe-top flex flex-wrap items-center justify-between gap-2 pointer-events-none">
+    <!-- タイトル＆状態インジケーター -->
+    <div class="glass-panel rounded-2xl px-3.5 py-2 flex items-center gap-2.5 shadow-lg pointer-events-auto max-w-[62vw] sm:max-w-none">
+      <div id="status-dot" class="w-3 h-3 shrink-0 rounded-full bg-amber-400 animate-pulse shadow-[0_0_10px_#fbbf24]"></div>
+      <div class="truncate">
+        <div class="text-[9px] sm:text-[11px] text-cyan-300/80 font-tech tracking-wider uppercase">3D AR BEAM ENGINE</div>
+        <div id="status-text" class="text-xs sm:text-sm font-bold text-white tracking-wide truncate">カメラ起動待機中...</div>
+      </div>
+    </div>
+
+    <!-- 右上コントロール群（カラー選択・カメラ切替・サウンド） -->
+    <div class="flex items-center gap-1.5 sm:gap-2 pointer-events-auto">
+      <!-- ビームカラー選択パレット -->
+      <div class="glass-panel rounded-2xl p-1.5 flex items-center gap-1.5 shadow-lg" title="ビームの色を変更">
+        <button data-color="cyan" class="color-btn w-6 h-6 sm:w-7 sm:h-7 rounded-xl bg-cyan-400 ring-2 ring-white scale-105 transition-transform" aria-label="シアンブルー"></button>
+        <button data-color="gold" class="color-btn w-6 h-6 sm:w-7 sm:h-7 rounded-xl bg-amber-400 opacity-75 active:scale-95 transition-all" aria-label="黄金"></button>
+        <button data-color="crimson" class="color-btn w-6 h-6 sm:w-7 sm:h-7 rounded-xl bg-rose-500 opacity-75 active:scale-95 transition-all" aria-label="深紅"></button>
+        <button data-color="purple" class="color-btn w-6 h-6 sm:w-7 sm:h-7 rounded-xl bg-purple-500 opacity-75 active:scale-95 transition-all" aria-label="パープル"></button>
+      </div>
+
+      <!-- フロント/リアカメラ切替ボタン -->
+      <button id="camera-flip-btn" class="glass-panel rounded-2xl p-2.5 text-white active:scale-90 transition-all shadow-lg" title="カメラ前後切替" aria-label="カメラ前後切替">
+        <svg class="w-5 h-5 text-slate-100" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+        </svg>
+      </button>
+
+      <!-- サウンドON/OFFボタン -->
+      <button id="sound-toggle-btn" class="glass-panel rounded-2xl p-2.5 text-white active:scale-90 transition-all shadow-lg" title="効果音 ON/OFF" aria-label="効果音切替">
+        <svg id="icon-sound-on" class="w-5 h-5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z"></path>
+        </svg>
+        <svg id="icon-sound-off" class="w-5 h-5 text-slate-400 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15zM17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2"></path>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- ポーズガイド（下部・セーフエリア対応） -->
+  <div id="pose-guide" class="fixed bottom-0 left-3 right-3 sm:right-auto sm:left-5 z-20 safe-bottom pointer-events-none flex justify-center sm:justify-start">
+    <div class="glass-panel rounded-2xl p-2.5 sm:p-3 flex items-center gap-3 shadow-xl max-w-sm">
+      <div class="w-11 h-11 rounded-xl bg-cyan-500/15 border border-cyan-400/30 flex items-center justify-center shrink-0">
+        <svg class="w-8 h-8 text-cyan-300" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M25 34 V12 C25 9 29 9 29 12 V34" />
+          <path d="M30 34 V10 C30 7 34 7 34 10 V34" />
+          <path d="M35 34 V26 C35 23 39 23 39 26 V36" />
+          <path d="M40 36 V29 C40 26 44 26 44 29 V42 C44 49 39 54 32 54 H26 C21 54 18 49 18 43 V36 C18 33 22 33 22 36 V40" />
+          <path d="M29 4 L29 1 M22 7 L19 5 M36 7 L39 5" stroke="#fde047" stroke-width="2.5"/>
+        </svg>
+      </div>
+      <div class="pr-1">
+        <div class="text-xs font-bold text-cyan-300">3D空間ビーム発射ポーズ</div>
+        <div class="text-[11px] sm:text-xs text-slate-200 leading-snug mt-0.5">
+          人差し指と中指を立てて向けると<br>指の立体方向へ3Dビームが伸びます！
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 初期スタート画面（オーバーレイ） -->
+  <div id="start-modal" class="fixed inset-0 z-30 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md">
+    <div class="glass-panel max-w-md w-full rounded-3xl p-6 sm:p-8 text-center shadow-2xl border border-cyan-500/30">
+      <div class="w-16 h-16 mx-auto mb-4 rounded-2xl bg-gradient-to-br from-cyan-400 to-blue-600 flex items-center justify-center shadow-[0_0_25px_rgba(34,211,238,0.5)]">
+        <svg class="w-9 h-9 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+        </svg>
+      </div>
+      <h1 class="text-xl sm:text-2xl font-black tracking-tight text-white mb-2">
+        二本指3Dエネルギービーム
+      </h1>
+      <p class="text-xs sm:text-sm text-slate-300 mb-6 leading-relaxed">
+        カメラに手をかざし、<span class="text-cyan-300 font-bold">人差し指と中指を立てる</span>と、指が向いている3D空間の方向へ立体エネルギービームが発射されます！<br>
+        <span class="text-[11px] text-slate-400 mt-1 inline-block">※指をカメラに向けると手前に迫り、横に向けると奥へ伸びます</span>
+      </p>
+
+      <!-- エラーメッセージ表示枠 -->
+      <div id="error-box" class="hidden mb-4 p-3 rounded-xl bg-rose-500/20 border border-rose-500/50 text-rose-200 text-xs text-left leading-relaxed"></div>
+
+      <button id="start-camera-btn" class="w-full py-4 px-6 rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold text-base shadow-[0_0_20px_rgba(6,182,212,0.5)] active:scale-95 transition-all flex items-center justify-center gap-2">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+        </svg>
+        <span>カメラを起動して始める</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- ローディングスピナー -->
+  <div id="loading-overlay" class="hidden fixed inset-0 z-40 flex flex-col items-center justify-center p-4 bg-slate-950/85 backdrop-blur-sm">
+    <div class="w-12 h-12 border-4 border-cyan-400/30 border-t-cyan-400 rounded-full animate-spin mb-4"></div>
+    <p id="loading-text" class="text-cyan-300 font-bold tracking-wider text-sm text-center">AIハンドトラッキングを読み込み中...</p>
+  </div>
+
+  <script>
+    /**
+     * ============================================================================
+     * 二本指 3D空間エネルギービーム ARカメラ (Three.js + MediaPipe Hands)
+     * ============================================================================
+     */
+
+    // DOM要素
+    const videoElement = document.getElementById('webcam');
+    const threeCanvas = document.getElementById('three-canvas');
+    const stageContainer = document.getElementById('stage-container');
+    const flashOverlay = document.getElementById('flash-overlay');
+
+    const startModal = document.getElementById('start-modal');
+    const startCameraBtn = document.getElementById('start-camera-btn');
+    const loadingOverlay = document.getElementById('loading-overlay');
+    const loadingText = document.getElementById('loading-text');
+    const errorBox = document.getElementById('error-box');
+
+    const statusDot = document.getElementById('status-dot');
+    const statusText = document.getElementById('status-text');
+    const soundToggleBtn = document.getElementById('sound-toggle-btn');
+    const iconSoundOn = document.getElementById('icon-sound-on');
+    const iconSoundOff = document.getElementById('icon-sound-off');
+    const cameraFlipBtn = document.getElementById('camera-flip-btn');
+    const colorBtns = document.querySelectorAll('.color-btn');
+
+    // ビームカラーテーマ（Hex値）
+    const COLOR_THEMES = {
+      cyan: {
+        core: 0xffffff,
+        inner: 0x38bdf8,
+        outer: 0x0284c7,
+        spiral: 0xfde047,
+        spark: 0xbae6fd
+      },
+      gold: {
+        core: 0xffffff,
+        inner: 0xfef08a,
+        outer: 0xd97706,
+        spiral: 0xffffff,
+        spark: 0xfef9c3
+      },
+      crimson: {
+        core: 0xffffff,
+        inner: 0xfb7185,
+        outer: 0xe11d48,
+        spiral: 0xfbbf24,
+        spark: 0xffe4e6
+      },
+      purple: {
+        core: 0xffffff,
+        inner: 0xd8b4fe,
+        outer: 0x7e22ce,
+        spiral: 0x38bdf8,
+        spark: 0xf3e8ff
+      }
+    };
+
+    // モバイル端末判定（モデル軽量化のため）
+    const isMobileDevice = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+    // アプリ状態管理
+    const state = {
+      isCameraRunning: false,
+      facingMode: 'user', // 'user'（内カメラ） / 'environment'（外カメラ）
+      currentStream: null,
+      isProcessingFrame: false,
+      isSoundEnabled: true,
+      currentTheme: COLOR_THEMES.cyan,
+      frameCount: 0,
+      wasFiringLastFrame: false,
+      detectedHands3D: [] // 解析済み3D手データ（最大2手）
+    };
+
+    /**
+     * ============================================================================
+     * Web Audio API サウンドシンセサイザー
+     * ============================================================================
+     */
+    class BeamAudioEngine {
+      constructor() {
+        this.ctx = null;
+        this.isPlaying = false;
+        this.masterGain = null;
+        this.osc1 = null;
+        this.osc2 = null;
+        this.noiseNode = null;
+        this.filterNode = null;
+      }
+
+      init() {
+        if (!this.ctx) {
+          const AudioContext = window.AudioContext || window.webkitAudioContext;
+          this.ctx = new AudioContext();
+        }
+        if (this.ctx.state === 'suspended') {
+          this.ctx.resume();
+        }
+      }
+
+      playBurstImpact() {
+        if (!state.isSoundEnabled) return;
+        this.init();
+        const now = this.ctx.currentTime;
+
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(240, now);
+        osc.frequency.exponentialRampToValueAtTime(36, now + 0.35);
+
+        gain.gain.setValueAtTime(0.45, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.38);
+
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.4);
+
+        const sparkOsc = this.ctx.createOscillator();
+        const sparkGain = this.ctx.createGain();
+        sparkOsc.type = 'square';
+        sparkOsc.frequency.setValueAtTime(1450, now);
+        sparkOsc.frequency.exponentialRampToValueAtTime(300, now + 0.18);
+
+        sparkGain.gain.setValueAtTime(0.18, now);
+        sparkGain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+
+        sparkOsc.connect(sparkGain);
+        sparkGain.connect(this.ctx.destination);
+        sparkOsc.start(now);
+        sparkOsc.stop(now + 0.22);
+      }
+
+      startContinuousBeam() {
+        if (!state.isSoundEnabled || this.isPlaying) return;
+        this.init();
+        const now = this.ctx.currentTime;
+        this.isPlaying = true;
+
+        this.masterGain = this.ctx.createGain();
+        this.masterGain.gain.setValueAtTime(0.01, now);
+        this.masterGain.gain.linearRampToValueAtTime(0.24, now + 0.08);
+        this.masterGain.connect(this.ctx.destination);
+
+        this.osc1 = this.ctx.createOscillator();
+        this.osc1.type = 'sawtooth';
+        this.osc1.frequency.setValueAtTime(60, now);
+
+        this.osc2 = this.ctx.createOscillator();
+        this.osc2.type = 'triangle';
+        this.osc2.frequency.setValueAtTime(122, now);
+
+        const bufferSize = this.ctx.sampleRate * 2;
+        const noiseBuffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+        const output = noiseBuffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) {
+          output[i] = Math.random() * 2 - 1;
+        }
+        this.noiseNode = this.ctx.createBufferSource();
+        this.noiseNode.buffer = noiseBuffer;
+        this.noiseNode.loop = true;
+
+        this.filterNode = this.ctx.createBiquadFilter();
+        this.filterNode.type = 'bandpass';
+        this.filterNode.frequency.setValueAtTime(500, now);
+        this.filterNode.Q.setValueAtTime(2.5, now);
+
+        const noiseGain = this.ctx.createGain();
+        noiseGain.gain.setValueAtTime(0.32, now);
+
+        this.osc1.connect(this.masterGain);
+        this.osc2.connect(this.masterGain);
+        this.noiseNode.connect(this.filterNode);
+        this.filterNode.connect(noiseGain);
+        noiseGain.connect(this.masterGain);
+
+        this.osc1.start(now);
+        this.osc2.start(now);
+        this.noiseNode.start(now);
+      }
+
+      updateModulation(frameCount) {
+        if (!this.isPlaying || !this.ctx) return;
+        const now = this.ctx.currentTime;
+        const wobble = Math.sin(frameCount * 0.4) * 6;
+        this.osc1.frequency.setTargetAtTime(60 + wobble, now, 0.05);
+        this.filterNode.frequency.setTargetAtTime(500 + Math.sin(frameCount * 0.7) * 180, now, 0.05);
+      }
+
+      stopContinuousBeam() {
+        if (!this.isPlaying) return;
+        this.isPlaying = false;
+        try {
+          const now = this.ctx.currentTime;
+          this.masterGain.gain.setTargetAtTime(0.0001, now, 0.05);
+          setTimeout(() => {
+            if (this.osc1) { this.osc1.stop(); this.osc1.disconnect(); }
+            if (this.osc2) { this.osc2.stop(); this.osc2.disconnect(); }
+            if (this.noiseNode) { this.noiseNode.stop(); this.noiseNode.disconnect(); }
+          }, 120);
+        } catch (e) {}
+      }
+    }
+
+    const audioEngine = new BeamAudioEngine();
+
+    /**
+     * ============================================================================
+     * Three.js 3Dシーン＆立体ボリュームビーム構築
+     * ============================================================================
+     */
+    const scene = new THREE.Scene();
+
+    // 透視投影カメラ（視野角50度、手前0.1〜奥100）
+    const camera = new THREE.PerspectiveCamera(
+      50,
+      window.innerWidth / window.innerHeight,
+      0.1,
+      100
+    );
+    camera.position.set(0, 0, 10);
+    camera.lookAt(0, 0, 0);
+
+    // 透明背景WebGLレンダラー（背後のカメラ映像と合成）
+    const renderer = new THREE.WebGLRenderer({
+      canvas: threeCanvas,
+      alpha: true,
+      antialias: true,
+      powerPreference: 'high-performance'
+    });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+
+    function onWindowResize() {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h);
+    }
+    window.addEventListener('resize', onWindowResize);
+
+    // 発光用ラジアルテクスチャをプロシージャル生成（外部画像不要）
+    function createGlowTexture() {
+      const c = document.createElement('canvas');
+      c.width = 128;
+      c.height = 128;
+      const g = c.getContext('2d');
+      const grad = g.createRadialGradient(64, 64, 2, 64, 64, 64);
+      grad.addColorStop(0, 'rgba(255,255,255,1)');
+      grad.addColorStop(0.25, 'rgba(255,255,255,0.85)');
+      grad.addColorStop(0.6, 'rgba(255,255,255,0.25)');
+      grad.addColorStop(1, 'rgba(255,255,255,0)');
+      g.fillStyle = grad;
+      g.fillRect(0, 0, 128, 128);
+      const tex = new THREE.CanvasTexture(c);
+      return tex;
+    }
+    const glowTexture = createGlowTexture();
+
+    // 3D空間上の立体エネルギービームリグ（最大2手分）
+    class VolumetricBeam3DRig {
+      constructor() {
+        this.root = new THREE.Group();
+        this.root.visible = false;
+        scene.add(this.root);
+
+        // 平滑化用の現在位置・方向ベクトル
+        this.currentPos = new THREE.Vector3();
+        this.currentDir = new THREE.Vector3(0, 1, 0);
+        this.hasInitialized = false;
+
+        // 1. 発射口（指先）の3Dプラズマコア球体＋レンズフレア
+        const coreSphereGeo = new THREE.SphereGeometry(0.18, 20, 20);
+        this.coreSphereMat = new THREE.MeshBasicMaterial({
+          color: 0xffffff,
+          transparent: true,
+          opacity: 0.95
+        });
+        this.coreSphere = new THREE.Mesh(coreSphereGeo, this.coreSphereMat);
+        this.root.add(this.coreSphere);
+
+        const haloSphereGeo = new THREE.SphereGeometry(0.42, 20, 20);
+        this.haloSphereMat = new THREE.MeshBasicMaterial({
+          color: 0x38bdf8,
+          transparent: true,
+          opacity: 0.55,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false
+        });
+        this.haloSphere = new THREE.Mesh(haloSphereGeo, this.haloSphereMat);
+        this.root.add(this.haloSphere);
+
+        // カメラ正面を向くスプライトフレア
+        this.flareMat = new THREE.SpriteMaterial({
+          map: glowTexture,
+          color: 0x38bdf8,
+          transparent: true,
+          opacity: 0.9,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false
+        });
+        this.flareSprite = new THREE.Sprite(this.flareMat);
+        this.flareSprite.scale.set(2.4, 2.4, 1);
+        this.root.add(this.flareSprite);
+
+        // 2. 3Dビーム本体グループ（ローカル +Z 方向へ伸びる）
+        this.beamAxisGroup = new THREE.Group();
+        this.root.add(this.beamAxisGroup);
+
+        const beamLen = 28;
+
+        // 中心コア円柱（純白高輝度・先端に向かってわずかに広がる）
+        const innerGeo = new THREE.CylinderGeometry(0.11, 0.08, beamLen, 16, 1, true);
+        innerGeo.rotateX(Math.PI / 2); // +Z軸向きに回転
+        innerGeo.translate(0, 0, beamLen / 2);
+        this.innerBeamMat = new THREE.MeshBasicMaterial({
+          color: 0xffffff,
+          transparent: true,
+          opacity: 0.96,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false
+        });
+        this.innerBeam = new THREE.Mesh(innerGeo, this.innerBeamMat);
+        this.beamAxisGroup.add(this.innerBeam);
+
+        // 中間エネルギー層（テーマカラー）
+        const midGeo = new THREE.CylinderGeometry(0.28, 0.16, beamLen, 20, 1, true);
+        midGeo.rotateX(Math.PI / 2);
+        midGeo.translate(0, 0, beamLen / 2);
+        this.midBeamMat = new THREE.MeshBasicMaterial({
+          color: 0x38bdf8,
+          transparent: true,
+          opacity: 0.65,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false
+        });
+        this.midBeam = new THREE.Mesh(midGeo, this.midBeamMat);
+        this.beamAxisGroup.add(this.midBeam);
+
+        // 外側ボリュームオーラ層
+        const outerGeo = new THREE.CylinderGeometry(0.58, 0.28, beamLen, 20, 1, true);
+        outerGeo.rotateX(Math.PI / 2);
+        outerGeo.translate(0, 0, beamLen / 2);
+        this.outerBeamMat = new THREE.MeshBasicMaterial({
+          color: 0x0284c7,
+          transparent: true,
+          opacity: 0.32,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false
+        });
+        this.outerBeam = new THREE.Mesh(outerGeo, this.outerBeamMat);
+        this.beamAxisGroup.add(this.outerBeam);
+
+        // 3. 3D螺旋（スパイラル）エネルギーチューブ（2本交差）
+        this.spiralGroup = new THREE.Group();
+        this.beamAxisGroup.add(this.spiralGroup);
+
+        this.spiralMats = [];
+        for (let s = 0; s < 2; s++) {
+          const pts = [];
+          const segments = 140;
+          for (let i = 0; i <= segments; i++) {
+            const t = i / segments;
+            const z = t * beamLen;
+            const angle = z * 2.2 + s * Math.PI;
+            const radius = 0.16 + Math.min(t * 1.5, 0.25);
+            pts.push(new THREE.Vector3(Math.cos(angle) * radius, Math.sin(angle) * radius, z));
+          }
+          const curve = new THREE.CatmullRomCurve3(pts);
+          const tubeGeo = new THREE.TubeGeometry(curve, 120, 0.032, 8, false);
+          const tubeMat = new THREE.MeshBasicMaterial({
+            color: s === 0 ? 0xfde047 : 0x38bdf8,
+            transparent: true,
+            opacity: 0.85,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false
+          });
+          this.spiralMats.push(tubeMat);
+          this.spiralGroup.add(new THREE.Mesh(tubeGeo, tubeMat));
+        }
+
+        // 4. ビーム軸に沿って前進する3D衝撃波トーラスリング（複数）
+        this.rings = [];
+        const ringGeo = new THREE.TorusGeometry(0.32, 0.028, 10, 32);
+        this.ringMat = new THREE.MeshBasicMaterial({
+          color: 0x38bdf8,
+          transparent: true,
+          opacity: 0.85,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false
+        });
+        for (let r = 0; r < 6; r++) {
+          const ringMesh = new THREE.Mesh(ringGeo, this.ringMat);
+          this.beamAxisGroup.add(ringMesh);
+          this.rings.push({
+            mesh: ringMesh,
+            progress: r / 6
+          });
+        }
+
+        // 5. 3Dスパークパーティクル（Points）
+        const particleCount = 90;
+        const pPositions = new Float32Array(particleCount * 3);
+        this.particleData = [];
+        for (let i = 0; i < particleCount; i++) {
+          const z = Math.random() * 18;
+          const r = 0.08 + Math.random() * 0.65;
+          const theta = Math.random() * Math.PI * 2;
+          pPositions[i * 3] = Math.cos(theta) * r;
+          pPositions[i * 3 + 1] = Math.sin(theta) * r;
+          pPositions[i * 3 + 2] = z;
+          this.particleData.push({
+            z,
+            r,
+            theta,
+            speed: 0.35 + Math.random() * 0.55
+          });
+        }
+        const pGeo = new THREE.BufferGeometry();
+        pGeo.setAttribute('position', new THREE.BufferAttribute(pPositions, 3));
+        this.particleMat = new THREE.PointsMaterial({
+          color: 0xbae6fd,
+          size: 0.24,
+          map: glowTexture,
+          transparent: true,
+          opacity: 0.9,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false
+        });
+        this.particles = new THREE.Points(pGeo, this.particleMat);
+        this.beamAxisGroup.add(this.particles);
+      }
+
+      applyTheme(theme) {
+        this.haloSphereMat.color.setHex(theme.inner);
+        this.flareMat.color.setHex(theme.inner);
+        this.midBeamMat.color.setHex(theme.inner);
+        this.outerBeamMat.color.setHex(theme.outer);
+        this.spiralMats[0].color.setHex(theme.spiral);
+        this.spiralMats[1].color.setHex(theme.inner);
+        this.ringMat.color.setHex(theme.inner);
+        this.particleMat.color.setHex(theme.spark);
+      }
+
+      update(targetPos, targetDir, theme, time) {
+        this.root.visible = true;
+        this.applyTheme(theme);
+
+        // 3D位置と発射方向のスムーズ補間（手ブレ軽減）
+        if (!this.hasInitialized) {
+          this.currentPos.copy(targetPos);
+          this.currentDir.copy(targetDir).normalize();
+          this.hasInitialized = true;
+        } else {
+          this.currentPos.lerp(targetPos, 0.45);
+          this.currentDir.lerp(targetDir, 0.4).normalize();
+        }
+
+        this.root.position.copy(this.currentPos);
+
+        // ローカル +Z 軸を 3D発射方向ベクトルへ回転一致させる
+        const forwardZ = new THREE.Vector3(0, 0, 1);
+        const quat = new THREE.Quaternion().setFromUnitVectors(forwardZ, this.currentDir);
+        this.beamAxisGroup.quaternion.copy(quat);
+
+        // 脈動アニメーション
+        const pulse = 1 + Math.sin(time * 0.85) * 0.18;
+        this.coreSphere.scale.setScalar(pulse);
+        this.haloSphere.scale.setScalar(pulse * 1.15);
+        this.flareSprite.scale.set(2.5 * pulse, 2.5 * pulse, 1);
+
+        this.innerBeam.scale.set(pulse, pulse, 1);
+        this.midBeam.scale.set(pulse, pulse, 1);
+        this.outerBeam.scale.set(pulse, pulse, 1);
+
+        // 3D螺旋の高速回転
+        this.spiralGroup.rotation.z = -time * 0.38;
+
+        // 衝撃波リングの前進アニメーション
+        for (const r of this.rings) {
+          r.progress += 0.032;
+          if (r.progress > 1) r.progress -= 1;
+          const dist = r.progress * 14;
+          const scale = 0.65 + r.progress * 1.6;
+          r.mesh.position.z = dist;
+          r.mesh.scale.set(scale, scale, 1);
+        }
+
+        // 3Dスパーク粒子の前進更新
+        const posAttr = this.particles.geometry.attributes.position;
+        for (let i = 0; i < this.particleData.length; i++) {
+          const pd = this.particleData[i];
+          pd.z += pd.speed;
+          pd.theta += 0.08;
+          if (pd.z > 18) pd.z = 0;
+          posAttr.setXYZ(
+            i,
+            Math.cos(pd.theta) * pd.r,
+            Math.sin(pd.theta) * pd.r,
+            pd.z
+          );
+        }
+        posAttr.needsUpdate = true;
+      }
+
+      hide() {
+        this.root.visible = false;
+        this.hasInitialized = false;
+      }
+    }
+
+    // 指先トラッキング確認用の3D光点オーブ（最大2手×2指＝4個）
+    class FingertipOrbPool {
+      constructor() {
+        this.orbs = [];
+        for (let i = 0; i < 4; i++) {
+          const mat = new THREE.SpriteMaterial({
+            map: glowTexture,
+            color: i % 2 === 0 ? 0xfb7185 : 0x38bdf8,
+            transparent: true,
+            opacity: 0.95,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false
+          });
+          const sprite = new THREE.Sprite(mat);
+          sprite.scale.set(0.38, 0.38, 1);
+          sprite.visible = false;
+          scene.add(sprite);
+          this.orbs.push(sprite);
+        }
+      }
+
+      update(handsList) {
+        let idx = 0;
+        for (const h of handsList) {
+          if (idx < 4) {
+            this.orbs[idx].position.copy(h.indexTip3D);
+            this.orbs[idx].visible = true;
+            idx++;
+          }
+          if (idx < 4) {
+            this.orbs[idx].position.copy(h.middleTip3D);
+            this.orbs[idx].visible = true;
+            idx++;
+          }
+        }
+        for (; idx < 4; idx++) {
+          this.orbs[idx].visible = false;
+        }
+      }
+    }
+
+    const beamRigs = [new VolumetricBeam3DRig(), new VolumetricBeam3DRig()];
+    const tipOrbs = new FingertipOrbPool();
+
+    /**
+     * ============================================================================
+     * MediaPipe ランドマーク → 3D空間座標＆3D指方向ベクトル変換
+     * ============================================================================
+     */
+
+    // ビデオの object-fit: cover に合わせた正規化スクリーン座標(-1..+1)への変換
+    function landmarkToNDC(lm, isMirrored) {
+      const videoW = videoElement.videoWidth || 1280;
+      const videoH = videoElement.videoHeight || 720;
+      const screenW = window.innerWidth;
+      const screenH = window.innerHeight;
+
+      const videoAspect = videoW / videoH;
+      const screenAspect = screenW / screenH;
+
+      let scaleX = 1;
+      let scaleY = 1;
+      if (screenAspect > videoAspect) {
+        // 画面が横長：上下がトリミングされる
+        scaleY = screenAspect / videoAspect;
+      } else {
+        // 画面が縦長（スマホ等）：左右がトリミングされる
+        scaleX = videoAspect / screenAspect;
+      }
+
+      const rawX = isMirrored ? (1 - lm.x) : lm.x;
+      const ndcX = (rawX - 0.5) * 2 * scaleX;
+      const ndcY = -(lm.y - 0.5) * 2 * scaleY;
+      return { ndcX, ndcY };
+    }
+
+    // 正規化スクリーン座標(NDC)と奥行きZからThree.js 3Dワールド座標を計算
+    function landmarkTo3DWorld(lm, baseDepthZ, isMirrored) {
+      const { ndcX, ndcY } = landmarkToNDC(lm, isMirrored);
+
+      // MediaPipeの相対Z（手首基準の奥行き）を3D空間のZへスケーリング
+      // 手前（カメラ側）に出すほど z がプラス（カメラ z=10 に近づく）になる
+      const worldZ = baseDepthZ - lm.z * 7.5;
+
+      // カメラからの距離に応じたフラスタム（視野錐台）の縦横幅を計算
+      const distFromCam = Math.max(1.5, camera.position.z - worldZ);
+      const vFovRad = THREE.MathUtils.degToRad(camera.fov);
+      const visibleHeight = 2 * Math.tan(vFovRad / 2) * distFromCam;
+      const visibleWidth = visibleHeight * camera.aspect;
+
+      const worldX = ndcX * (visibleWidth / 2);
+      const worldY = ndcY * (visibleHeight / 2);
+
+      return new THREE.Vector3(worldX, worldY, worldZ);
+    }
+
+    function dist2D(p1, p2) {
+      return Math.hypot(p1.x - p2.x, p1.y - p2.y);
+    }
+
+    // 1本の手のポーズ判定＆3D発射原点・3D発射方向ベクトル算出
+    function analyzeHand3D(landmarks, isMirrored) {
+      const wrist = landmarks[0];
+
+      const indexMcp = landmarks[5];
+      const indexPip = landmarks[6];
+      const indexTip = landmarks[8];
+
+      const middleMcp = landmarks[9];
+      const middlePip = landmarks[10];
+      const middleTip = landmarks[12];
+
+      const ringPip = landmarks[14];
+      const ringTip = landmarks[16];
+
+      const pinkyPip = landmarks[18];
+      const pinkyTip = landmarks[20];
+
+      // 1. ポーズ判定（人差し指と中指が伸び、薬指と小指が曲がっているか）
+      const dWristIndexTip = dist2D(wrist, indexTip);
+      const dWristIndexPip = dist2D(wrist, indexPip);
+      const dWristIndexMcp = dist2D(wrist, indexMcp);
+
+      const dWristMiddleTip = dist2D(wrist, middleTip);
+      const dWristMiddlePip = dist2D(wrist, middlePip);
+      const dWristMiddleMcp = dist2D(wrist, middleMcp);
+
+      const dWristRingTip = dist2D(wrist, ringTip);
+      const dWristRingPip = dist2D(wrist, ringPip);
+
+      const dWristPinkyTip = dist2D(wrist, pinkyTip);
+      const dWristPinkyPip = dist2D(wrist, pinkyPip);
+
+      const isIndexExtended =
+        dWristIndexTip > dWristIndexPip * 1.1 &&
+        dWristIndexTip > dWristIndexMcp * 1.28;
+
+      const isMiddleExtended =
+        dWristMiddleTip > dWristMiddlePip * 1.1 &&
+        dWristMiddleTip > dWristMiddleMcp * 1.28;
+
+      const isRingFolded =
+        dWristRingTip < dWristRingPip * 1.16 ||
+        dWristRingTip < dWristMiddleTip * 0.85;
+
+      const isPinkyFolded =
+        dWristPinkyTip < dWristPinkyPip * 1.16 ||
+        dWristPinkyTip < dWristIndexTip * 0.85;
+
+      // カメラへの距離感（手の大きさから基準奥行きZを推定）
+      const handScale = dist2D(wrist, middleMcp);
+      const baseDepthZ = THREE.MathUtils.clamp((handScale - 0.16) * 14, -3.5, 3.5);
+
+      // 各関節を3Dワールド座標へ変換
+      const pIndexTip = landmarkTo3DWorld(indexTip, baseDepthZ, isMirrored);
+      const pMiddleTip = landmarkTo3DWorld(middleTip, baseDepthZ, isMirrored);
+      const pIndexPip = landmarkTo3DWorld(indexPip, baseDepthZ, isMirrored);
+      const pMiddlePip = landmarkTo3DWorld(middlePip, baseDepthZ, isMirrored);
+      const pIndexMcp = landmarkTo3DWorld(indexMcp, baseDepthZ, isMirrored);
+      const pMiddleMcp = landmarkTo3DWorld(middleMcp, baseDepthZ, isMirrored);
+
+      // 発射原点：人差し指先と中指先の中間3D座標
+      const origin3D = new THREE.Vector3().addVectors(pIndexTip, pMiddleTip).multiplyScalar(0.5);
+
+      // 発射方向3Dベクトル：指の付け根(MCP)〜第2関節(PIP)〜指先(TIP)を通る立体ベクトル
+      const midMcp = new THREE.Vector3().addVectors(pIndexMcp, pMiddleMcp).multiplyScalar(0.5);
+      const midPip = new THREE.Vector3().addVectors(pIndexPip, pMiddlePip).multiplyScalar(0.5);
+
+      const vecUpper = new THREE.Vector3().subVectors(origin3D, midPip).normalize();
+      const vecLower = new THREE.Vector3().subVectors(origin3D, midMcp).normalize();
+      const dir3D = new THREE.Vector3().addVectors(vecUpper.multiplyScalar(0.65), vecLower.multiplyScalar(0.35)).normalize();
+
+      // 指をカメラ正面に直接向けた場合（2D投影長が短く、指先Zが付け根より手前にある場合）の奥行き強調補正
+      const zDiff = (indexMcp.z + middleMcp.z) * 0.5 - (indexTip.z + middleTip.z) * 0.5;
+      if (zDiff > 0.03) {
+        dir3D.z += zDiff * 5.5;
+        dir3D.normalize();
+      } else if (zDiff < -0.03) {
+        dir3D.z += zDiff * 5.5;
+        dir3D.normalize();
+      }
+
+      const isBeamPose = isIndexExtended && isMiddleExtended && isRingFolded && isPinkyFolded;
+
+      return {
+        isFiring: isBeamPose,
+        origin3D,
+        dir3D,
+        indexTip3D: pIndexTip,
+        middleTip3D: pMiddleTip
+      };
+    }
+
+    /**
+     * ============================================================================
+     * MediaPipe Hands 結果受信＆メイン3Dレンダリングループ
+     * ============================================================================
+     */
+    let handsInstance = null;
+
+    function onHandsResults(results) {
+      const isMirrored = (state.facingMode === 'user');
+      const parsedHands = [];
+
+      if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        for (const landmarks of results.multiHandLandmarks) {
+          parsedHands.push(analyzeHand3D(landmarks, isMirrored));
+        }
+      }
+      state.detectedHands3D = parsedHands;
+    }
+
+    function updateStatusUI(mode, text) {
+      statusText.textContent = text;
+      statusDot.className = 'w-3 h-3 shrink-0 rounded-full transition-all ';
+      if (mode === 'firing') {
+        statusDot.className += 'bg-cyan-400 animate-ping shadow-[0_0_15px_#22d3ee]';
+      } else if (mode === 'detected') {
+        statusDot.className += 'bg-sky-400 shadow-[0_0_10px_#38bdf8]';
+      } else if (mode === 'ready') {
+        statusDot.className += 'bg-emerald-400 shadow-[0_0_10px_#34d399]';
+      } else {
+        statusDot.className += 'bg-amber-400 animate-pulse shadow-[0_0_10px_#fbbf24]';
+      }
+    }
+
+    async function mainLoop() {
+      state.frameCount++;
+
+      if (state.isCameraRunning && videoElement.readyState >= 2) {
+        // 1. MediaPipe Hands へフレーム送信
+        if (handsInstance && !state.isProcessingFrame) {
+          state.isProcessingFrame = true;
+          try {
+            await handsInstance.send({ image: videoElement });
+          } catch (e) {}
+          state.isProcessingFrame = false;
+        }
+
+        // 2. 指先トラッキング3Dマーカーの更新
+        tipOrbs.update(state.detectedHands3D);
+
+        // 3. 3Dビームリグの更新
+        const firingHands = state.detectedHands3D.filter(h => h.isFiring);
+        for (let i = 0; i < beamRigs.length; i++) {
+          if (i < firingHands.length) {
+            beamRigs[i].update(
+              firingHands[i].origin3D,
+              firingHands[i].dir3D,
+              state.currentTheme,
+              state.frameCount
+            );
+          } else {
+            beamRigs[i].hide();
+          }
+        }
+
+        // 4. 発射演出（画面フラッシュ・振動・効果音・ステータス表示）
+        const isFiringNow = firingHands.length > 0;
+        if (isFiringNow) {
+          if (!state.wasFiringLastFrame) {
+            flashOverlay.style.opacity = '0.32';
+            setTimeout(() => { flashOverlay.style.opacity = '0'; }, 90);
+            audioEngine.playBurstImpact();
+            audioEngine.startContinuousBeam();
+          }
+          audioEngine.updateModulation(state.frameCount);
+          stageContainer.classList.add('shaking');
+          updateStatusUI('firing', '⚡ 3Dエネルギービーム発射中！');
+        } else {
+          if (state.wasFiringLastFrame) {
+            audioEngine.stopContinuousBeam();
+          }
+          stageContainer.classList.remove('shaking');
+
+          if (state.detectedHands3D.length > 0) {
+            updateStatusUI('detected', '✋ 認識中：人差し指と中指を立ててください');
+          } else {
+            updateStatusUI('ready', 'カメラに手をかざしてください');
+          }
+        }
+        state.wasFiringLastFrame = isFiringNow;
+      }
+
+      // Three.js 3Dシーンをレンダリング
+      renderer.render(scene, camera);
+      requestAnimationFrame(mainLoop);
+    }
+
+    /**
+     * ============================================================================
+     * カメラ起動（スマホブラウザ完全対応）＆ MediaPipe 初期化
+     * ============================================================================
+     */
+    async function startCameraStream() {
+      if (state.currentStream) {
+        state.currentStream.getTracks().forEach(track => track.stop());
+        state.currentStream = null;
+      }
+
+      // フロントカメラのみ映像を左右反転表示
+      if (state.facingMode === 'user') {
+        videoElement.classList.add('mirrored-video');
+      } else {
+        videoElement.classList.remove('mirrored-video');
+      }
+
+      // スマホの縦持ち・横持ちどちらでも最適な解像度でカメラ取得
+      const constraints = {
+        audio: false,
+        video: {
+          facingMode: { ideal: state.facingMode },
+          width: { ideal: isMobileDevice ? 960 : 1280 },
+          height: { ideal: isMobileDevice ? 540 : 720 }
+        }
+      };
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      state.currentStream = stream;
+      videoElement.srcObject = stream;
+
+      await new Promise((resolve) => {
+        videoElement.onloadedmetadata = () => {
+          videoElement.play().then(resolve).catch(resolve);
+        };
+      });
+    }
+
+    async function initCameraAndTracking() {
+      errorBox.classList.add('hidden');
+      loadingOverlay.classList.remove('hidden');
+      loadingText.textContent = '3Dハンドトラッキングを読み込み中...';
+
+      try {
+        // タップ操作時にAudioContextをアンロック（iOS/Android対応）
+        audioEngine.init();
+
+        if (!handsInstance) {
+          handsInstance = new Hands({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${file}`
+          });
+
+          handsInstance.setOptions({
+            maxNumHands: 2,
+            modelComplexity: isMobileDevice ? 0 : 1, // スマホは軽量モデルで60fps維持
+            minDetectionConfidence: 0.55,
+            minTrackingConfidence: 0.55
+          });
+
+          handsInstance.onResults(onHandsResults);
+        }
+
+        loadingText.textContent = 'カメラを起動しています...';
+        await startCameraStream();
+
+        state.isCameraRunning = true;
+        startModal.classList.add('hidden');
+        loadingOverlay.classList.add('hidden');
+        updateStatusUI('ready', 'カメラに手をかざしてください');
+
+      } catch (err) {
+        console.error('Camera Error:', err);
+        loadingOverlay.classList.add('hidden');
+        errorBox.innerHTML = '<strong>カメラを起動できませんでした。</strong><br>・ブラウザのカメラアクセス許可を「許可」にしてください。<br>・LINEやSNSのアプリ内ブラウザで開いている場合は、SafariやChromeなどの標準ブラウザで開き直してください。';
+        errorBox.classList.remove('hidden');
+      }
+    }
+
+    /**
+     * ============================================================================
+     * イベントリスナー登録
+     * ============================================================================
+     */
+    startCameraBtn.addEventListener('click', initCameraAndTracking);
+
+    // フロント/リアカメラ切替
+    cameraFlipBtn.addEventListener('click', async () => {
+      if (!state.isCameraRunning) return;
+      state.facingMode = (state.facingMode === 'user') ? 'environment' : 'user';
+      state.detectedHands3D = [];
+      beamRigs.forEach(rig => rig.hide());
+
+      loadingOverlay.classList.remove('hidden');
+      loadingText.textContent = 'カメラを切り替えています...';
+      try {
+        await startCameraStream();
+      } catch (err) {
+        console.error('Flip camera error:', err);
+      }
+      loadingOverlay.classList.add('hidden');
+    });
+
+    // サウンドON/OFF切替
+    soundToggleBtn.addEventListener('click', () => {
+      state.isSoundEnabled = !state.isSoundEnabled;
+      if (state.isSoundEnabled) {
+        audioEngine.init();
+        iconSoundOn.classList.remove('hidden');
+        iconSoundOff.classList.add('hidden');
+      } else {
+        audioEngine.stopContinuousBeam();
+        iconSoundOn.classList.add('hidden');
+        iconSoundOff.classList.remove('hidden');
+      }
+    });
+
+    // ビームカラー切替
+    colorBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const colorKey = btn.getAttribute('data-color');
+        if (COLOR_THEMES[colorKey]) {
+          state.currentTheme = COLOR_THEMES[colorKey];
+          colorBtns.forEach(b => {
+            b.classList.remove('ring-2', 'ring-white', 'scale-105');
+            b.classList.add('opacity-75');
+          });
+          btn.classList.add('ring-2', 'ring-white', 'scale-105');
+          btn.classList.remove('opacity-75');
+        }
+      });
+    });
+
+    // レンダリングループ開始
+    window.onload = () => {
+      mainLoop();
+    };
+  </script>
+</body>
+</html>
